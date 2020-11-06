@@ -1,0 +1,433 @@
+library(dendextend)
+library(tidyverse)
+library(edgeR)
+library(DESeq2)
+library(dplyr)
+library(EnsDb.Hsapiens.v86)
+library(WGCNA)
+library(ggplot2)
+
+setwd("~/Desktop/PHD/2020/Preliminary/R working directory 15:10:2020")
+## Generate a DESeq table and merge gene ID's
+
+combined <- read.delim("merged_gene_counts.txt", row.names=1, stringsAsFactors = FALSE)
+ 
+tabFinal <- as.data.frame(read_csv("Manifest_seq_table_final_white_list_extended_Clinical_with_exclusions.csv"))
+ 
+rownames(tabFinal) <- tabFinal$SEQ_ID
+ 
+select <- rowSums(cpm(combined) > 1) >= 20
+ 
+MJ.raw.counts.rsub.filt <-combined[ select, tabFinal$SEQ_ID]
+ 
+all(rownames(tabFinal) == colnames(MJ.raw.counts.rsub.filt))
+ 
+## Produce a DESeq dataset
+MJ.raw.rsub.se <- DESeqDataSetFromMatrix(countData = MJ.raw.counts.rsub.filt, colData = tabFinal, design = ~ Sample_ID)
+ 
+## Perform rlog transformation of the raw count data
+ 
+MJ.raw.rsub.rlog <- vst(MJ.raw.rsub.se)
+dat.rlog <- assay(MJ.raw.rsub.rlog)
+ 
+geneNames <- select(EnsDb.Hsapiens.v86, key=rownames(dat.rlog), columns=c("ENTREZID", "SYMBOL"), keytype="GENEID")
+
+
+geneNames <- geneNames[!duplicated(geneNames$GENEID), ]
+geneNames <- geneNames[!is.na(geneNames$SYMBOL), ]
+rownames(geneNames) <- geneNames$GENEID
+ 
+inter <- intersect(rownames(dat.rlog), geneNames$GENEID)
+geneNames <- geneNames[inter, ]
+ 
+datET <- dat.rlog[inter, ]
+ 
+rowGroup <- geneNames[rownames(geneNames) %in%rownames(dat.rlog) ,"SYMBOL"]
+ 
+dat.rlog.genes <- dat.rlog
+rownames(dat.rlog.genes) <- geneNames[rownames(dat.rlog.genes), "SYMBOL"]
+ 
+datET.collapsed <- WGCNA::collapseRows(datET, rowGroup=geneNames$SYMBOL, rowID=geneNames$GENEID)$datETcollapsed
+ 
+save(dat.rlog, dat.rlog.genes, MJ.raw.rsub.se, MJ.raw.rsub.rlog, MJ.raw.counts.rsub.filt, tabFinal, geneNames, file="~/Dropbox/SCC_final_analysis/featureCounts/finalData.RData")
+
+
+### new page
+
+library(rafalib)
+
+scaledata <- t(scale(t(datET.collapsed))) # Centers and scales data.
+scaledata <- scaledata[complete.cases(scaledata),]
+
+hr <- hclust(as.dist(1-cor(t(scaledata), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+hc <- hclust(as.dist(1-cor(scaledata, method="spearman")), method="complete") # Clusters columns by Spearman correlation
+
+?heatmap.2
+
+library(gplots)
+heatmap.2(datET.collapsed,
+          Rowv=as.dendrogram(hr), 
+          Colv=as.dendrogram(hc),
+          col=redblue(100),
+          scale="row",
+          margins = c(7, 7),
+          cexCol = 0.7,
+          labRow = F,
+          main = "SCC Samples",
+          trace = "none",
+          dendrogram = c("none"))
+
+TreeC = as.dendrogram(hc, method="average", cex = 0.1)
+
+plot(hc,  main = "SCC Sample Clustering",
+     ylab = "Height",
+     xlab = "Sample ID",
+     cex = 0.25,
+     hang = -1,
+     )
+
+
+TreeR = as.dendrogram(hr, method="average")
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+hclusth1.5 = cutree(hr, h=1.5) #cut tree at height of 1.5
+hclusth1.0 = cutree(hr, h=1.0) #cut tree at height of 1.0
+hclusth0.5 = cutree(hr, h=0.5) #cut tree at height of 0.5
+
+
+library(dendextend)
+#plot the tree
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+#add the three cluster vectors
+the_bars <- cbind(hclusth0.5, hclusth1.0, hclusth1.5)
+#this makes the bar
+colored_bars(the_bars, TreeR, sort_by_labels_order = T, y_shift=-0.1, rowLabels = c("h=0.5","h=1.0","h=1.5"),cex.rowLabels=0.7)
+#this will add lines showing the cut heights
+abline(h=1.5, lty = 2, col="grey")
+abline(h=1.0, lty = 2, col="grey")
+abline(h=0.5, lty = 2, col="grey")
+
+hclustk4 = cutree(hr, k=4)
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+colored_bars(hclustk4, TreeR, sort_by_labels_order = T, y_shift=-0.1, rowLabels = c("k=4"),cex.rowLabels=0.7)
+
+
+### new page
+
+library(Biostrings) ## dna to rna
+library(biomaRt)
+ensembl = useMart("ensembl", dataset=
+                      "hsapiens_gene_ensembl")
+
+
+
+gb <- getBM(attributes=c("ensembl_transcript_id","transcript_start","transcript_end","ensembl_exon_id","exon_chrom_start","exon_chrom_end","strand","chromosome_name","gene_biotype"),filters = c("ensembl_gene_id","biotype"), values=list(ensembl_id,"lncRNA"), mart=ensembl)
+
+
+## MAX's attempt
+
+library("biomaRt")
+
+biomaRt::listMarts()
+listMarts(host = "http://useast.ensembl.org")
+
+ensembl <- useMart("ensembl")
+
+mart = useMart("ensembl")
+mart=useMart(biomart="ensembl", dataset="hsapiens_gene_ensembl")
+
+
+lncrna <- getBM(attributes= c('ensembl_gene_id',
+                               'ensembl_transcript_id',
+                               'transcript_length',
+                               'chromosome_name',
+                               'transcript_start',
+                               'transcript_end',
+                               'ensembl_exon_id',
+                               'exon_chrom_start',
+                               'exon_chrom_end',
+                               'strand'),
+                 filters = "biotype",
+                 value = 'lncRNA',
+                 mart = useMart("ensembl", dataset="hsapiens_gene_ensembl"))
+ 
+#sort by chromosome, then by start
+lncrna <- lncrna[order(lncrna[,'chromosome_name'],lncrna[,'transcript_start']),]
+ 
+#how many lincRNA transcripts are there?
+length(unique(lncrna$ensembl_transcript_id))
+#[1] 50692
+ 
+#I only want lincRNAs on assembled chromosomes
+my_chr <- c(1:22,'X','Y')
+lncrna_assembled <- subset(lncrna, lncrna$chromosome_name %in% my_chr)
+lncrna_assembled$chromosome_name <- factor(lncrna_assembled$chromosome_name,
+                                            levels=my_chr)
+ 
+#how many lincRNAs?
+length(unique(lncrna_assembled$ensembl_transcript_id))
+#[1] 47582
+ 
+#create a temp object for plotting purposes
+tmp <- lncrna_assembled[,c('ensembl_transcript_id','chromosome_name')]
+#remove duplicated rows
+tmp <- tmp[!duplicated(tmp),]
+ 
+#plot the distribution of lincRNAs on the chromosomes
+plot(table(tmp$chromosome_name),
+     ylab='Number of lincRNA',
+     xlab='Chromosome',
+     main='Distribution of Ensembl lincRNAs on hg38 chromosomes',
+     ylim=c(0,1200))
+ 
+#the table of lincRNAs will be saved
+#inside a file called my_lincrna.tsv
+#to find out the location of this file
+#type getwd() into the R console
+write.table(lncrna_assembled,
+            file = 'my_lincrna.tsv',
+            quote = F,
+            sep = "\t",
+            row.names = F)
+ 
+#save image
+save.image(file='lncrna.RData')
+
+## Biomart filter
+
+## filter for lncRNA's
+
+lncRNAnames <- select(EnsDb.Hsapiens.v86, key=lncrna_assembled$ensembl_gene_id, columns=c("ENTREZID", "SYMBOL"), keytype="GENEID")
+lncRNAnames <- lncRNAnames[!duplicated(lncRNAnames$GENEID), ]
+lncRNAnames <- lncRNAnames[!is.na(lncRNAnames$SYMBOL), ]
+rownames(lncRNAnames) <- lncRNAnames$GENEID
+
+
+inter1 <- intersect(rownames(dat.rlog), lncRNAnames$GENEID)
+lncRNAnames <- lncRNAnames[inter1, ]
+
+datETrna <- dat.rlog[inter1, ]
+
+rowGroup <- lncRNAnames[rownames(lncRNAnames) %in%rownames(dat.rlog) ,"SYMBOL"]
+
+dat.rlog.genes1 <- dat.rlog
+rownames(dat.rlog.genes1) <- lncRNAnames[rownames(dat.rlog.genes1), "SYMBOL"]
+
+datETrna.collapsed <- WGCNA::collapseRows(datETrna, rowGroup=lncRNAnames$SYMBOL, rowID=lncRNAnames$GENEID)$datETcollapsed
+
+
+## new page
+
+mydat <- read.table(url("http://bowtie-bio.sourceforge.net/recount/countTables/trapnell_count_table.txt"), sep="\t", header =T, row.names = 1)
+#drop genes with low counts and take the first 1000.
+mydat <- mydat[rowSums(mydat > 1) >=4,]
+mydat <- mydat[1:1000,]
+y <- as.matrix((mydat)) 
+
+library(edgeR)
+y <- DGEList(counts = y, group=c(1,2,3,4))
+y <- calcNormFactors(y)
+z <- cpm(y, normalized.lib.size=TRUE)
+
+scaledata <- t(scale(t(z))) # Centers and scales data.
+scaledata <- scaledata[complete.cases(scaledata),]
+
+hr <- hclust(as.dist(1-cor(t(scaledata), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+hc <- hclust(as.dist(1-cor(scaledata, method="spearman")), method="complete") # Clusters columns by Spearman correlation.
+
+
+library(gplots)
+heatmap.2(z,
+          Rowv=as.dendrogram(hr), 
+          Colv=as.dendrogram(hc),
+          col=redgreen(100),
+          scale="row",
+          margins = c(7, 7),
+          cexCol = 0.7,
+          labRow = F,
+          main = "Heatmap.2",
+          trace = "none")
+
+TreeC = as.dendrogram(hc, method="average")
+plot(TreeC,
+     main = "Sample Clustering",
+     ylab = "Height")
+
+TreeR = as.dendrogram(hr, method="average")
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+library(dendextend)
+#plot the tree
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+
+hclusth1.5 = cutree(hr, h=1.5) #cut tree at height of 1.5
+hclusth1.0 = cutree(hr, h=1.0) #cut tree at height of 1.0
+hclusth0.5 = cutree(hr, h=0.5) #cut tree at height of 0.5
+
+
+
+#add the three cluster vectors
+the_bars <- cbind(hclusth0.5, hclusth1.0, hclusth1.5)
+#this makes the bar
+colored_bars(the_bars, TreeR, sort_by_labels_order = T, y_shift=-0.1, rowLabels = c("h=0.5","h=1.0","h=1.5"),cex.rowLabels=0.7)
+#this will add lines showing the cut heights
+abline(h=1.5, lty = 2, col="grey")
+abline(h=1.0, lty = 2, col="grey")
+abline(h=0.5, lty = 2, col="grey")
+
+
+
+### new page filetering RNA's
+
+
+## Biomart filter
+
+## filter for lncRNA's
+
+lncRNAnames <- select(EnsDb.Hsapiens.v86, key=lncrna_assembled$ensembl_gene_id, columns=c("ENTREZID", "SYMBOL"), keytype="GENEID")
+lncRNAnames <- lncRNAnames[!duplicated(lncRNAnames$GENEID), ]
+lncRNAnames <- lncRNAnames[!is.na(lncRNAnames$SYMBOL), ]
+rownames(lncRNAnames) <- lncRNAnames$GENEID
+
+
+inter1 <- intersect(rownames(dat.rlog), lncRNAnames$GENEID)
+lncRNAnames <- lncRNAnames[inter1, ]
+
+datETrna <- dat.rlog[inter1, ]
+
+rowGroup <- lncRNAnames[rownames(lncRNAnames) %in%rownames(dat.rlog) ,"SYMBOL"]
+
+dat.rlog.genes1 <- dat.rlog
+rownames(dat.rlog.genes1) <- lncRNAnames[rownames(dat.rlog.genes1), "SYMBOL"]
+
+datETrna.collapsed <- WGCNA::collapseRows(datETrna, rowGroup=lncRNAnames$SYMBOL, rowID=lncRNAnames$GENEID)$datETcollapsed
+
+
+### Graphing lncRNA's
+
+scaledata1 <- t(scale(t(datETrna.collapsed))) # Centers and scales data.
+scaledata1 <- scaledata1[complete.cases(scaledata1),]
+
+hr1 <- hclust(as.dist(1-cor(t(scaledata1), method="pearson")), method="complete") # Cluster rows by Pearson correlation.
+hc1 <- hclust(as.dist(1-cor(scaledata1, method="spearman")), method="complete") # Clusters columns by Spearman correlation
+
+?heatmap.2
+
+library(gplots)
+heatmap.2(datETrna.collapsed,
+          Rowv=as.dendrogram(hr1), 
+          Colv=as.dendrogram(hc1),
+          col=bluered(100),
+          scale="row",
+          margins = c(7, 7),
+          cexCol = 0.1,
+          labRow = F,
+          main = "SCC lncRNA Expression",
+          trace = "none",
+          dendrogram = c("column"))
+
+
+
+TreeC1 = as.dendrogram(hc1, method="average", cex = 0.1)
+
+plot(hc1,  main = "SCC Sample Clustering",
+     ylab = "Height",
+     xlab = "Sample ID",
+     cex = 0.25,
+     hang = -1,
+)
+
+
+TreeR1 = as.dendrogram(hr1, method="average")
+plot(TreeR1,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+hclusth1.5 = cutree(hr1, h=1.5) #cut tree at height of 1.5
+hclusth1.0 = cutree(hr1, h=1.0) #cut tree at height of 1.0
+hclusth0.5 = cutree(hr1, h=0.5) #cut tree at height of 0.5
+
+
+library(dendextend)
+#plot the tree
+plot(TreeR1,
+     leaflab = "none",
+     main = "lncRNA Gene Clustering",
+     ylab = "Height")
+
+#add the three cluster vectors
+the_bars <- cbind(hclusth0.5, hclusth1.0, hclusth1.5)
+#this makes the bar
+colored_bars(the_bars, TreeR1, sort_by_labels_order = T, y_shift=-0.1, rowLabels = c("h=0.5","h=1.0","h=1.5"),cex.rowLabels=0.7)
+#this will add lines showing the cut heights
+abline(h=1.5, lty = 2, col="grey")
+abline(h=1.0, lty = 2, col="grey")
+abline(h=0.5, lty = 2, col="grey")
+
+hclustk4 = cutree(hr1, k=4)
+plot(TreeR1,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+colored_bars(hclustk4, TreeR1, sort_by_labels_order = T, y_shift=-0.1, rowLabels = c("k=4"),cex.rowLabels=0.7)
+
+
+### new page random shite
+
+plot(hc,  main = "SCC Sample Clustering",
+     ylab = "Height",
+     xlab = "Sample ID",
+     cex = 0.25,
+     hang = -1,)
+
+
+TreeR = as.dendrogram(hr, method="average")
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+hclusth1.5 = cutree(hr, h=1.5) #cut tree at height of 1.5
+hclusth1.0 = cutree(hr, h=1.0) #cut tree at height of 1.0
+hclusth0.5 = cutree(hr, h=0.5) #cut tree at height of 0.5
+
+
+library(dendextend)
+#plot the tree
+plot(TreeR,
+     leaflab = "none",
+     main = "Gene Clustering",
+     ylab = "Height")
+
+#add the three cluster vectors
+the_bars <- cbind(hclusth0.5, hclusth1.0, hclusth1.5)
+#this makes the bar
+colored_bars(the_bars, TreeR, sort_by_labels_order = T, y_shift=-0.1, rowLabels = c("h=0.5","h=1.0","h=1.5"),cex.rowLabels=0.7)
+#this will add lines showing the cut heights
+abline(h=1.5, lty = 2, col="grey")
+abline(h=1.0, lty = 2, col="grey")
+abline(h=0.5, lty = 2, col="grey")
+
+
+
+
+
+
